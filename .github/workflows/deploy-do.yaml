@@ -17,10 +17,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check secret
+        run:
+          echo "Secret length: ${{ secrets.DO_API_TOKEN }}" | wc -c
+
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
         with:
-          version: '1.97.0'   # можно обновить
+          version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
 
       - name: Authenticate doctl
