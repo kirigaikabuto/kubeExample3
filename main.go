@@ -9,6 +9,7 @@ import (
 
 func main() {
 	port := getEnv("PORT", "8080")
+
 	env := getEnv("ENV", "dev")
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
