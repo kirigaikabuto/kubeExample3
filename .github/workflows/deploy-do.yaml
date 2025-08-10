@@ -7,6 +7,7 @@ on:
 
 env:
   IMAGE_NAME: my-go-api
+  token: ${{ secrets.DO_API_TOKEN }}
 
 jobs:
   build-and-push:
