@@ -20,7 +20,12 @@ jobs:
 
       - name: Check secret
         run: |
-          echo ${{ secrets.DO_API_TOKEN }}
+          if [ -z "${{ secrets.DO_API_TOKEN }}" ]; then
+            echo "Secret is empty"
+            exit 1
+          else
+            echo "Secret is set"
+          fi
 
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
