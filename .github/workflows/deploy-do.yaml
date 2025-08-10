@@ -61,10 +61,21 @@ jobs:
       - name: Generate image metadata
         id: image-meta
         run: |
+          # Ensure we have the registry value
+          if [[ -z "${{ secrets.DOCR_REGISTRY }}" ]]; then
+            echo "❌ DOCR_REGISTRY secret is empty"
+            exit 1
+          fi
+          
           IMAGE_TAG="${{ secrets.DOCR_REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "DEBUG: Setting image output to: ${IMAGE_TAG}"
           echo "image=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          
+          # Verify it was written
+          echo "DEBUG: GITHUB_OUTPUT contents:"
+          cat $GITHUB_OUTPUT
+          
           echo "Building image: ${IMAGE_TAG}"
-          echo "DEBUG: Full image tag set to: ${IMAGE_TAG}"
 
       - name: Build Docker image
         run: |
@@ -75,11 +86,29 @@ jobs:
           docker push ${{ steps.image-meta.outputs.image }}
           echo "✅ Image pushed successfully"
 
+      - name: Verify output before job ends
+        run: |
+          echo "DEBUG: Checking job outputs before ending build job"
+          echo "Image output: ${{ steps.image-meta.outputs.image }}"
+          if [[ -z "${{ steps.image-meta.outputs.image }}" ]]; then
+            echo "❌ ERROR: Image output is empty!"
+            exit 1
+          else
+            echo "✅ Image output is set correctly"
+          fi
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment: dev
     steps:
+      - name: Debug received outputs
+        run: |
+          echo "DEBUG: All outputs from build-and-push job:"
+          echo "${{ toJson(needs.build-and-push.outputs) }}"
+          echo "DEBUG: Specific image output:"
+          echo "${{ needs.build-and-push.outputs.image }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -112,11 +141,21 @@ jobs:
           kubectl apply -f /tmp/deployment.yaml
 
       - name: Update deployment with new image
-        env:
-          FULL_IMAGE_NAME: ${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
-          echo "DEBUG: Using reconstructed image name: ${FULL_IMAGE_NAME}"
-          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}="${FULL_IMAGE_NAME}"
+          # Try to use the output from build job first
+          IMAGE_FROM_BUILD="${{ needs.build-and-push.outputs.image }}"
+          
+          if [[ -n "${IMAGE_FROM_BUILD}" ]]; then
+            echo "✅ Using image from build job: ${IMAGE_FROM_BUILD}"
+            FINAL_IMAGE="${IMAGE_FROM_BUILD}"
+          else
+            echo "⚠️  Build job output is empty, reconstructing image name"
+            FINAL_IMAGE="${{ secrets.DOCR_REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+            echo "✅ Using reconstructed image: ${FINAL_IMAGE}"
+          fi
+          
+          echo "Updating deployment with image: ${FINAL_IMAGE}"
+          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}="${FINAL_IMAGE}"
 
       - name: Wait for deployment
         run: |
