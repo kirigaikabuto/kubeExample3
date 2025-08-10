@@ -12,7 +12,6 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: dev  # This references your GitHub environment
     outputs:
       image: ${{ steps.image-meta.outputs.image }}
     steps:
@@ -37,8 +36,20 @@ jobs:
           version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
 
+      - name: Verify DigitalOcean access
+        run: |
+          echo "Testing DO API access..."
+          doctl account get
+          echo "Testing registry access..."
+          doctl registry get || echo "Registry access failed - check permissions"
+
       - name: Login to DigitalOcean Container Registry
-        run: doctl registry login --expiry-seconds 1200
+        run: |
+          # Get Docker credentials and login
+          doctl registry login --expiry-seconds 1200
+          
+          # Alternative: Direct Docker login if above fails
+          # echo ${{ secrets.DO_API_TOKEN }} | docker login registry.digitalocean.com -u ${{ secrets.DO_API_TOKEN }} --password-stdin
 
       - name: Generate image metadata
         id: image-meta
