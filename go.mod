@@ -1,3 +1,3 @@
-module github.com/kirigaikabuto/kubeExample2
+module github.com/kirigaikabuto/kubeExample3
 
-go 1.23.11
+go 1.22.4

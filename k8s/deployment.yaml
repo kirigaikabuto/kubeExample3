@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: my-go-api
-          # по умолчанию указываем :latest, workflow затем обновит на конкретный тег
-          image: ghcr.io/kirigaikabuto/my-go-api:latest
+          # workflow подставит тег; здесь укажем placeholder
+          image: REGISTRY_PLACEHOLDER/my-go-api:latest
           ports:
             - containerPort: 8080
           env:

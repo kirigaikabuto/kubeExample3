@@ -15,7 +15,7 @@ func main() {
 		fmt.Fprintf(w, "Hello from Go! Environment: %s\n", env)
 	})
 
-	log.Printf("Starting server on port %s in %s environment", port, env)
+	log.Printf("Starting server on :%s (env=%s)\n", port, env)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
 	}
