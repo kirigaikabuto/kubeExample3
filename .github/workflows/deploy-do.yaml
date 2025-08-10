@@ -156,11 +156,39 @@ jobs:
           
           echo "Updating deployment with image: ${FINAL_IMAGE}"
           kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}="${FINAL_IMAGE}"
+          
+          # Force restart to ensure clean deployment
+          kubectl -n dev rollout restart deployment/${IMAGE_NAME}
 
       - name: Wait for deployment
         run: |
-          kubectl -n dev rollout status deployment/${IMAGE_NAME} --timeout=180s
-          kubectl -n dev get pods -l app=${IMAGE_NAME}
+          echo "Starting deployment rollout..."
+          kubectl -n dev rollout status deployment/${IMAGE_NAME} --timeout=300s || {
+            echo "❌ Rollout timed out, collecting diagnostics..."
+          
+            echo "=== Deployment Status ==="
+            kubectl -n dev get deployment ${IMAGE_NAME} -o wide
+          
+            echo "=== ReplicaSet Status ==="
+            kubectl -n dev get replicasets -l app=${IMAGE_NAME}
+          
+            echo "=== Pod Status ==="
+            kubectl -n dev get pods -l app=${IMAGE_NAME} -o wide
+          
+            echo "=== Pod Descriptions ==="
+            kubectl -n dev describe pods -l app=${IMAGE_NAME}
+          
+            echo "=== Recent Events ==="
+            kubectl -n dev get events --sort-by='.firstTimestamp' | tail -20
+          
+            echo "=== Pod Logs (if any pods exist) ==="
+            for pod in $(kubectl -n dev get pods -l app=${IMAGE_NAME} -o jsonpath='{.items[*].metadata.name}'); do
+              echo "--- Logs for pod: $pod ---"
+              kubectl -n dev logs $pod --tail=50 || echo "No logs available for $pod"
+            done
+          
+            exit 1
+          }
 
       - name: Deployment summary
         env:
