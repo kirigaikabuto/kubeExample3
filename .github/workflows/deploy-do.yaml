@@ -12,6 +12,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: dev  # This references your GitHub environment
     outputs:
       image: ${{ steps.image-meta.outputs.image }}
     steps:
