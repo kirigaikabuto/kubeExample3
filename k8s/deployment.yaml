@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-go-api
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-go-api
+  template:
+    metadata:
+      labels:
+        app: my-go-api
+    spec:
+      containers:
+        - name: my-go-api
+          # по умолчанию указываем :latest, workflow затем обновит на конкретный тег
+          image: ghcr.io/kirigaikabuto/my-go-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ENV
+              value: "dev"
+            - name: PORT
+              value: "8080"
