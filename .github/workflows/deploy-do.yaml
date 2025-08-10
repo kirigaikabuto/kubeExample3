@@ -3,67 +3,63 @@ name: CI/CD -> DigitalOcean (dev)
 on:
   push:
     branches:
-      - main    # пуш в main триггерит деплой в dev (можешь поменять на dev)
+      - main
 
 env:
   IMAGE_NAME: my-go-api
-  token: ${{ secrets.DO_API_TOKEN }}
+  REGISTRY: ${{ secrets.DOCR_REGISTRY }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.set-image.outputs.image }}
+      image: ${{ steps.image-meta.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check secret
-        env:
-          DO_API_TOKEN: 'sdsdsdsd'
+      - name: Validate required secrets
         run: |
-          if [ -z "$DO_API_TOKEN" ]; then
-            echo "Secret is empty"
+          if [[ -z "${{ secrets.DO_API_TOKEN }}" ]]; then
+            echo "❌ DO_API_TOKEN secret is not set"
             exit 1
-          else
-            echo "Secret is set"
           fi
+          if [[ -z "${{ secrets.DOCR_REGISTRY }}" ]]; then
+            echo "❌ DOCR_REGISTRY secret is not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
 
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
         with:
           version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
-        env:
-          token: ${{ secrets.DO_API_TOKEN }}
 
-      - name: Authenticate doctl
-        env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
+      - name: Login to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Generate image metadata
+        id: image-meta
         run: |
-          echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
-
-      - name: Login to DO Container Registry (configures docker)
-        run: doctl registry login
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "image=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Building image: ${IMAGE_TAG}"
 
       - name: Build Docker image
         run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker build -t $IMAGE .
+          docker build -t ${{ steps.image-meta.outputs.image }} .
+
       - name: Push Docker image
         run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push $IMAGE
-
-      - name: set-image
-        id: set-image
-        run: echo "::set-output name=image::${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker push ${{ steps.image-meta.outputs.image }}
+          echo "✅ Image pushed successfully"
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (manifests)
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup doctl
@@ -72,29 +68,40 @@ jobs:
           version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
 
-      - name: Authenticate doctl
-        env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
-        run: |
-          echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
-
-      - name: Save kubeconfig for cluster
+      - name: Configure kubectl
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DO_CLUSTER_NAME }}
 
-      - name: Ensure namespace
-        run: kubectl apply -f k8s/namespace.yaml
-
-      - name: Apply Service & Deployment (initial)
+      - name: Verify cluster connection
         run: |
-          # substitute placeholder in deployment.yaml and apply
-          IMAGE=${{ needs.build-and-push.outputs.image }}
-          sed "s|REGISTRY_PLACEHOLDER|${{ secrets.DOCR_REGISTRY }}|g" k8s/deployment.yaml > k8s/_deployment_resolved.yaml
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Create namespace if needed
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+
+      - name: Apply Kubernetes manifests
+        run: |
+          # Apply service first (order matters for some setups)
           kubectl apply -f k8s/service.yaml
-          kubectl apply -f k8s/_deployment_resolved.yaml
+          
+          # Process deployment template
+          sed "s|REGISTRY_PLACEHOLDER|${{ env.REGISTRY }}|g" k8s/deployment.yaml > /tmp/deployment.yaml
+          kubectl apply -f /tmp/deployment.yaml
 
-      - name: Update deployment image to exact tag
+      - name: Update deployment with new image
         run: |
-          IMAGE=${{ needs.build-and-push.outputs.image }}
-          kubectl -n dev set image deployment/my-go-api my-go-api=$IMAGE
-          kubectl -n dev rollout status deployment/my-go-api --timeout=120s
+          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${{ needs.build-and-push.outputs.image }}
+
+      - name: Wait for deployment
+        run: |
+          kubectl -n dev rollout status deployment/${IMAGE_NAME} --timeout=180s
+          kubectl -n dev get pods -l app=${IMAGE_NAME}
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Deployment completed successfully"
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Namespace: dev"
+          kubectl -n dev get service ${IMAGE_NAME} -o wide
