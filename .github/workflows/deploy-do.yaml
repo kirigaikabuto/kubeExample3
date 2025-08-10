@@ -20,7 +20,7 @@ jobs:
 
       - name: Check secret
         run: |
-          echo "Secret length: ${{ secrets.DO_API_TOKEN }}" | wc -c
+          echo "${{ secrets.DO_API_TOKEN }}"
 
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
