@@ -7,7 +7,7 @@ on:
 
 env:
   IMAGE_NAME: my-go-api
-  token: ${{ secrets.DO_API_TOKEN }}
+  token: ${{ dev.DO_API_TOKEN }}
 
 jobs:
   build-and-push:
@@ -20,19 +20,19 @@ jobs:
 
       - name: Check secret
         run: |
-          echo "${{ secrets.DO_API_TOKEN }}"
+          echo "${{ dev.DO_API_TOKEN }}"
 
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
         with:
           version: '1.97.0'
-          token: ${{ secrets.DO_API_TOKEN }}
+          token: ${{ dev.DO_API_TOKEN }}
         env:
-          token: ${{ secrets.DO_API_TOKEN }}
+          token: ${{ dev.DO_API_TOKEN }}
 
       - name: Authenticate doctl
         env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ dev.DO_API_TOKEN }}
         run: |
           echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
 
@@ -41,16 +41,16 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          IMAGE=${{ dev.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker build -t $IMAGE .
       - name: Push Docker image
         run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          IMAGE=${{ dev.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push $IMAGE
 
       - name: set-image
         id: set-image
-        run: echo "::set-output name=image::${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        run: echo "::set-output name=image::${{ dev.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
   deploy:
     needs: build-and-push
@@ -63,17 +63,17 @@ jobs:
         uses: digitalocean/action-doctl@v2
         with:
           version: '1.97.0'
-          token: ${{ secrets.DO_API_TOKEN }}
+          token: ${{ dev.DO_API_TOKEN }}
 
       - name: Authenticate doctl
         env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ dev.DO_API_TOKEN }}
         run: |
           echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
 
       - name: Save kubeconfig for cluster
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ secrets.DO_CLUSTER_NAME }}
+          doctl kubernetes cluster kubeconfig save ${{ dev.DO_CLUSTER_NAME }}
 
       - name: Ensure namespace
         run: kubectl apply -f k8s/namespace.yaml
@@ -82,7 +82,7 @@ jobs:
         run: |
           # substitute placeholder in deployment.yaml and apply
           IMAGE=${{ needs.build-and-push.outputs.image }}
-          sed "s|REGISTRY_PLACEHOLDER|${{ secrets.DOCR_REGISTRY }}|g" k8s/deployment.yaml > k8s/_deployment_resolved.yaml
+          sed "s|REGISTRY_PLACEHOLDER|${{ dev.DOCR_REGISTRY }}|g" k8s/deployment.yaml > k8s/_deployment_resolved.yaml
           kubectl apply -f k8s/service.yaml
           kubectl apply -f k8s/_deployment_resolved.yaml
 
