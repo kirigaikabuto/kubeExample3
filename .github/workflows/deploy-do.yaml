@@ -131,6 +131,21 @@ jobs:
         run: |
           kubectl apply -f k8s/namespace.yaml
 
+      - name: Create/update registry secret
+        run: |
+          # Method 1: Direct kubectl command (simpler)
+          kubectl -n dev delete secret regcred --ignore-not-found=true
+          kubectl -n dev create secret docker-registry regcred \
+            --docker-server=registry.digitalocean.com \
+            --docker-username=${{ secrets.DO_API_TOKEN }} \
+            --docker-password=${{ secrets.DO_API_TOKEN }} \
+            --docker-email=noreply@example.com
+          
+          # Method 2: Alternative using doctl (if above doesn't work)
+          # doctl registry kubernetes-manifest | kubectl apply -f -
+          
+          echo "✅ Registry secret created/updated"
+
       - name: Apply Kubernetes manifests
         run: |
           # Apply service first (order matters for some setups)
