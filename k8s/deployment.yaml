@@ -13,9 +13,10 @@ spec:
       labels:
         app: my-go-api
     spec:
+      imagePullSecrets:           # ADD THIS SECTION
+        - name: regcred             # ADD THIS LINE
       containers:
         - name: my-go-api
-          # workflow подставит тег; здесь укажем placeholder
           image: REGISTRY_PLACEHOLDER/my-go-api:latest
           ports:
             - containerPort: 8080

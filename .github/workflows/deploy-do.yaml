@@ -3,7 +3,7 @@ name: CI/CD -> DigitalOcean (dev)
 on:
   push:
     branches:
-      - main    # пуш в main триггерит деплой в dev (можешь поменять на dev)
+      - main
 
 env:
   IMAGE_NAME: my-go-api
@@ -11,75 +11,205 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: dev
     outputs:
-      image: ${{ steps.set-image.outputs.image }}
+      image: ${{ steps.image-meta.outputs.image }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          if [[ -z "${{ secrets.DO_API_TOKEN }}" ]]; then
+            echo "❌ DO_API_TOKEN secret is not set"
+            exit 1
+          fi
+          if [[ -z "${{ secrets.DOCR_REGISTRY }}" ]]; then
+            echo "❌ DOCR_REGISTRY secret is not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+
+      - name: Setup doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          version: '1.97.0'
+          token: ${{ secrets.DO_API_TOKEN }}
+
+      # - name: Verify DigitalOcean access
+      #   run: |
+      #     echo "Testing DO API access..."
+      #     if doctl account get; then
+      #       echo "✅ Account access successful"
+      #     else
+      #       echo "❌ Account access failed - check token permissions"
+      #       exit 1
+      #     fi
+      #
+      #     echo "Testing registry access..."
+      #     if doctl registry get; then
+      #       echo "✅ Registry access successful"
+      #     else
+      #       echo "❌ Registry access failed - may need to create registry first"
+      #       echo "Will attempt to continue..."
+      #     fi
+
+      - name: Login to DigitalOcean Container Registry
+        run: |
+          doctl registry login --expiry-seconds 1200
+
+      - name: Generate image metadata
+        id: image-meta
+        run: |
+          # Ensure we have the registry value
+          if [[ -z "${{ secrets.DOCR_REGISTRY }}" ]]; then
+            echo "❌ DOCR_REGISTRY secret is empty"
+            exit 1
+          fi
+          
+          IMAGE_TAG="${{ secrets.DOCR_REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "DEBUG: Setting image output to: ${IMAGE_TAG}"
+          echo "image=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          
+          # Verify it was written
+          echo "DEBUG: GITHUB_OUTPUT contents:"
+          cat $GITHUB_OUTPUT
+          
+          echo "Building image: ${IMAGE_TAG}"
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ steps.image-meta.outputs.image }} .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ steps.image-meta.outputs.image }}
+          echo "✅ Image pushed successfully"
+
+      - name: Verify output before job ends
+        run: |
+          echo "DEBUG: Checking job outputs before ending build job"
+          echo "Image output: ${{ steps.image-meta.outputs.image }}"
+          if [[ -z "${{ steps.image-meta.outputs.image }}" ]]; then
+            echo "❌ ERROR: Image output is empty!"
+            exit 1
+          else
+            echo "✅ Image output is set correctly"
+          fi
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Debug received outputs
+        run: |
+          echo "DEBUG: All outputs from build-and-push job:"
+          echo "${{ toJson(needs.build-and-push.outputs) }}"
+          echo "DEBUG: Specific image output:"
+          echo "${{ needs.build-and-push.outputs.image }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup doctl
         uses: digitalocean/action-doctl@v2
         with:
-          version: '1.97.0'   # можно обновить
+          version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
 
-      - name: Authenticate doctl
-        env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
-        run: |
-          echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
-
-      - name: Login to DO Container Registry (configures docker)
-        run: doctl registry login
-
-      - name: Build Docker image
-        run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker build -t $IMAGE .
-      - name: Push Docker image
-        run: |
-          IMAGE=${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push $IMAGE
-
-      - name: set-image
-        id: set-image
-        run: echo "::set-output name=image::${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout (manifests)
-        uses: actions/checkout@v4
-
-      - name: Setup doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          version: '1.97.0'
-
-      - name: Authenticate doctl
-        env:
-          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DO_API_TOKEN }}
-        run: |
-          echo "$DIGITALOCEAN_ACCESS_TOKEN" | doctl auth init --access-token
-
-      - name: Save kubeconfig for cluster
+      - name: Configure kubectl
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DO_CLUSTER_NAME }}
 
-      - name: Ensure namespace
-        run: kubectl apply -f k8s/namespace.yaml
-
-      - name: Apply Service & Deployment (initial)
+      - name: Verify cluster connection
         run: |
-          # substitute placeholder in deployment.yaml and apply
-          IMAGE=${{ needs.build-and-push.outputs.image }}
-          sed "s|REGISTRY_PLACEHOLDER|${{ secrets.DOCR_REGISTRY }}|g" k8s/deployment.yaml > k8s/_deployment_resolved.yaml
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Create namespace if needed
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+
+      - name: Create/update registry secret
+        run: |
+          # Method 1: Direct kubectl command (simpler)
+          kubectl -n dev delete secret regcred --ignore-not-found=true
+          kubectl -n dev create secret docker-registry regcred \
+            --docker-server=registry.digitalocean.com \
+            --docker-username=${{ secrets.DO_API_TOKEN }} \
+            --docker-password=${{ secrets.DO_API_TOKEN }} \
+            --docker-email=noreply@example.com
+          
+          # Method 2: Alternative using doctl (if above doesn't work)
+          # doctl registry kubernetes-manifest | kubectl apply -f -
+          
+          echo "✅ Registry secret created/updated"
+
+      - name: Apply Kubernetes manifests
+        run: |
+          # Apply service first (order matters for some setups)
           kubectl apply -f k8s/service.yaml
-          kubectl apply -f k8s/_deployment_resolved.yaml
+          
+          # Process deployment template
+          sed "s|REGISTRY_PLACEHOLDER|${{ secrets.DOCR_REGISTRY }}|g" k8s/deployment.yaml > /tmp/deployment.yaml
+          kubectl apply -f /tmp/deployment.yaml
 
-      - name: Update deployment image to exact tag
+      - name: Update deployment with new image
         run: |
-          IMAGE=${{ needs.build-and-push.outputs.image }}
-          kubectl -n dev set image deployment/my-go-api my-go-api=$IMAGE
-          kubectl -n dev rollout status deployment/my-go-api --timeout=120s
+          # Try to use the output from build job first
+          IMAGE_FROM_BUILD="${{ needs.build-and-push.outputs.image }}"
+          
+          if [[ -n "${IMAGE_FROM_BUILD}" ]]; then
+            echo "✅ Using image from build job: ${IMAGE_FROM_BUILD}"
+            FINAL_IMAGE="${IMAGE_FROM_BUILD}"
+          else
+            echo "⚠️  Build job output is empty, reconstructing image name"
+            FINAL_IMAGE="${{ secrets.DOCR_REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
+            echo "✅ Using reconstructed image: ${FINAL_IMAGE}"
+          fi
+          
+          echo "Updating deployment with image: ${FINAL_IMAGE}"
+          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}="${FINAL_IMAGE}"
+          
+          # Force restart to ensure clean deployment
+          kubectl -n dev rollout restart deployment/${IMAGE_NAME}
+
+      - name: Wait for deployment
+        run: |
+          echo "Starting deployment rollout..."
+          kubectl -n dev rollout status deployment/${IMAGE_NAME} --timeout=300s || {
+            echo "❌ Rollout timed out, collecting diagnostics..."
+          
+            echo "=== Deployment Status ==="
+            kubectl -n dev get deployment ${IMAGE_NAME} -o wide
+          
+            echo "=== ReplicaSet Status ==="
+            kubectl -n dev get replicasets -l app=${IMAGE_NAME}
+          
+            echo "=== Pod Status ==="
+            kubectl -n dev get pods -l app=${IMAGE_NAME} -o wide
+          
+            echo "=== Pod Descriptions ==="
+            kubectl -n dev describe pods -l app=${IMAGE_NAME}
+          
+            echo "=== Recent Events ==="
+            kubectl -n dev get events --sort-by='.firstTimestamp' | tail -20
+          
+            echo "=== Pod Logs (if any pods exist) ==="
+            for pod in $(kubectl -n dev get pods -l app=${IMAGE_NAME} -o jsonpath='{.items[*].metadata.name}'); do
+              echo "--- Logs for pod: $pod ---"
+              kubectl -n dev logs $pod --tail=50 || echo "No logs available for $pod"
+            done
+          
+            exit 1
+          }
+
+      - name: Deployment summary
+        env:
+          FULL_IMAGE_NAME: ${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          echo "✅ Deployment completed successfully"
+          echo "Image: ${FULL_IMAGE_NAME}"
+          echo "Namespace: dev"
+          kubectl -n dev get service ${IMAGE_NAME} -o wide
