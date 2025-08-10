@@ -20,7 +20,7 @@ jobs:
 
       - name: Check secret
         env:
-          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DO_API_TOKEN: 'sdsdsdsd'
         run: |
           if [ -z "$DO_API_TOKEN" ]; then
             echo "Secret is empty"
