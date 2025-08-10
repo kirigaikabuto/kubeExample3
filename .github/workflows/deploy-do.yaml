@@ -61,6 +61,7 @@ jobs:
         uses: digitalocean/action-doctl@v2
         with:
           version: '1.97.0'
+          token: ${{ secrets.DO_API_TOKEN }}
 
       - name: Authenticate doctl
         env:
