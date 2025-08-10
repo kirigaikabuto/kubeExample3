@@ -7,12 +7,11 @@ on:
 
 env:
   IMAGE_NAME: my-go-api
-  REGISTRY: ${{ secrets.DOCR_REGISTRY }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: dev  # This references your GitHub environment
+    environment: dev
     outputs:
       image: ${{ steps.image-meta.outputs.image }}
     steps:
@@ -37,27 +36,35 @@ jobs:
           version: '1.97.0'
           token: ${{ secrets.DO_API_TOKEN }}
 
-      - name: Verify DigitalOcean access
-        run: |
-          echo "Testing DO API access..."
-          doctl account get
-          echo "Testing registry access..."
-          doctl registry get || echo "Registry access failed - check permissions"
+      # - name: Verify DigitalOcean access
+      #   run: |
+      #     echo "Testing DO API access..."
+      #     if doctl account get; then
+      #       echo "✅ Account access successful"
+      #     else
+      #       echo "❌ Account access failed - check token permissions"
+      #       exit 1
+      #     fi
+      #
+      #     echo "Testing registry access..."
+      #     if doctl registry get; then
+      #       echo "✅ Registry access successful"
+      #     else
+      #       echo "❌ Registry access failed - may need to create registry first"
+      #       echo "Will attempt to continue..."
+      #     fi
 
       - name: Login to DigitalOcean Container Registry
         run: |
-          # Get Docker credentials and login
           doctl registry login --expiry-seconds 1200
-          
-          # Alternative: Direct Docker login if above fails
-          # echo ${{ secrets.DO_API_TOKEN }} | docker login registry.digitalocean.com -u ${{ secrets.DO_API_TOKEN }} --password-stdin
 
       - name: Generate image metadata
         id: image-meta
         run: |
-          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          IMAGE_TAG="${{ secrets.DOCR_REGISTRY }}/${IMAGE_NAME}:${{ github.sha }}"
           echo "image=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Building image: ${IMAGE_TAG}"
+          echo "DEBUG: Full image tag set to: ${IMAGE_TAG}"
 
       - name: Build Docker image
         run: |
@@ -71,7 +78,7 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    environment: dev  # This references your GitHub environment
+    environment: dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,12 +108,15 @@ jobs:
           kubectl apply -f k8s/service.yaml
           
           # Process deployment template
-          sed "s|REGISTRY_PLACEHOLDER|${{ env.REGISTRY }}|g" k8s/deployment.yaml > /tmp/deployment.yaml
+          sed "s|REGISTRY_PLACEHOLDER|${{ secrets.DOCR_REGISTRY }}|g" k8s/deployment.yaml > /tmp/deployment.yaml
           kubectl apply -f /tmp/deployment.yaml
 
       - name: Update deployment with new image
+        env:
+          FULL_IMAGE_NAME: ${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
-          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}=${{ needs.build-and-push.outputs.image }}
+          echo "DEBUG: Using reconstructed image name: ${FULL_IMAGE_NAME}"
+          kubectl -n dev set image deployment/${IMAGE_NAME} ${IMAGE_NAME}="${FULL_IMAGE_NAME}"
 
       - name: Wait for deployment
         run: |
@@ -114,8 +124,10 @@ jobs:
           kubectl -n dev get pods -l app=${IMAGE_NAME}
 
       - name: Deployment summary
+        env:
+          FULL_IMAGE_NAME: ${{ secrets.DOCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
           echo "✅ Deployment completed successfully"
-          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          echo "Image: ${FULL_IMAGE_NAME}"
           echo "Namespace: dev"
           kubectl -n dev get service ${IMAGE_NAME} -o wide
